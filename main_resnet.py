@@ -2,8 +2,8 @@ import os
 import logging
 import coloredlogs
 import torch
-from preprocess import read_ground_truth_files, open_images, tokenize_dataWithIndices, read_dataWithIndices, find_bertdata
-from bertresnet import train_avgbertresnet, test_avgbertresnet, load_model
+from preprocess import read_ground_truth_files, open_images
+from resnet import train_resnet, test_resnet, load_model
 import csv
 import numpy as np
 import random
@@ -12,8 +12,6 @@ from args import args
 from torchvision import models
 from torch.optim import lr_scheduler
 from torch import nn, optim
-from tqdm import tqdm
-from transformers import BertForSequenceClassification, AdamW
 
 
 # Setup colorful logging
@@ -33,7 +31,8 @@ def set_seed(seed):
 
 
 
-def run_tests(device, results_file):
+
+def run_resnet(device, results_file):
 	#prepare the dataset
 	logging.info("READING AND PARSING THE DATA...........")
 	ground_truth = read_ground_truth_files(args.data_dir)
@@ -49,36 +48,25 @@ def run_tests(device, results_file):
 	train_iter = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
 	dev_iter = DataLoader(dev_data, batch_size=args.batch_size, shuffle=False)
 	test_iter = DataLoader(test_data, batch_size=args.batch_size, shuffle=False)
-	train_iter_bert = find_bertdata(train_iter, args.feature)
-	dev_iter_bert = find_bertdata(dev_iter, args.feature)
-	test_iter_bert = find_bertdata(test_iter, args.feature)
 
+	for images, labels, path in test_iter:
+		print(path)
+		exit()
 
-	#resnet
-	model_resnet = models.resnet152(pretrained=True)
-	n_features = model_resnet.fc.in_features
-	model_resnet.fc = nn.Linear(n_features, args.num_label)
+	model = models.resnet152(pretrained=True)
+	n_features = model.fc.in_features
+	model.fc = nn.Linear(n_features, args.num_label)
 
-	optimizer_resnet = optim.SGD(model_resnet.parameters(), lr=0.001, momentum=0.9)
-	scheduler = lr_scheduler.StepLR(optimizer_resnet, step_size=7, gamma=0.1)
+	optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+	scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 	loss_fn = nn.CrossEntropyLoss().to(device)	
 	epoch = args.epochs
 
-	#bert
-	model_bert = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=args.num_label,
-                                                          output_attentions=False, output_hidden_states=False)
-	optimizer_bert = AdamW(model_bert.parameters(), lr=args.lr, eps=1e-8)
-
-
 
 	#create model save directory
-	checkpoint_dir_bert = os.path.join(args.checkpoint_dir, args.model_name_bert)
-	checkpoint_dir_resnet = os.path.join(args.checkpoint_dir, args.model_name_resnet)
-	if not os.path.exists(checkpoint_dir_bert):
-		os.makedirs(checkpoint_dir_bert)
-	if not os.path.exists(checkpoint_dir_resnet):
-		os.makedirs(checkpoint_dir_resnet)
-
+	checkpoint_dir = os.path.join(args.checkpoint_dir, args.model_name)
+	if not os.path.exists(checkpoint_dir):
+		os.makedirs(checkpoint_dir)
 
 	#run the tests
 	logging.info(
@@ -86,12 +74,11 @@ def run_tests(device, results_file):
             train=len(train_data),
             dev=len(dev_data),
             test=len(test_data)))
-	train_avgbertresnet(epoch, model_resnet, model_bert, train_iter, dev_iter, train_iter_bert, dev_iter_bert,
-					optimizer_resnet, optimizer_bert, loss_fn, scheduler, device, checkpoint_dir_bert, checkpoint_dir_resnet, results_file)
+	train_resnet(epoch, model, train_iter, dev_iter, optimizer, loss_fn, scheduler, device, checkpoint_dir, results_file)
 
-	model_resnet, model_bert = load_model(model_resnet, model_bert, checkpoint_dir_resnet, checkpoint_dir_bert)
-	acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = test_avgbertresnet(test_iter, test_iter_bert, model_resnet, model_bert, loss_fn, device)
-	del model_resnet, model_bert
+	model = load_model(model, checkpoint_dir)
+	acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = test_resnet(test_iter, model, loss_fn, device)
+	del model
 	return acc, f1, recall, prec, f1_ave, recall_ave, prec_ave
 
 
@@ -122,10 +109,6 @@ if __name__ == "__main__":
 	elif args.classifier == "resnet":
 		file_name = '{model_name}_epochs_{epoch}_lr_{lr}.csv'.format(model_name='resnet', epoch=args.epochs, lr=args.lr)
 		args.model_name = '{model_name}_epochs_{epoch}_lr_{lr}'.format(model_name='resnet', epoch=args.epochs, lr=args.lr)
-	elif args.classifier == "avg:resnetbert":
-		file_name = '{model_name}_epochs_{epoch}_lr_{lr}.csv'.format(model_name='avg_resnetbert', epoch=args.epochs, lr=args.lr)
-		args.model_name_bert = '{model_name}_epochs_{epoch}_lr_{lr}'.format(model_name='bert', epoch=args.epochs, lr=args.lr)
-		args.model_name_resnet = '{model_name}_epochs_{epoch}_lr_{lr}'.format(model_name='resnet', epoch=args.epochs, lr=args.lr)
 
 
 	results_file = os.path.join(args.checkpoint_dir, file_name)
@@ -135,7 +118,7 @@ if __name__ == "__main__":
 			'F1-abs', 'F1-conc', 'P-abs', 'P-conc', 'R-abs', 'R-conc'])
 
 	#run tests
-	acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = run_tests(device, results_file)
+	acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = run_resnet(device, results_file)
 
 	#print and log the results
 	stats_template = '\nAccuracy: {acc}\n' \
